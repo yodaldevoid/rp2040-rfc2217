@@ -6,7 +6,7 @@ use defmt::{info, panic};
 use defmt_rtt as _;
 use embassy_executor::Spawner;
 use embassy_futures::join::join3;
-use embassy_futures::select::{select, Either};
+use embassy_futures::select::{select, select3, Either, Either3};
 use embassy_futures::yield_now;
 use embassy_rp::gpio::{Input, Level, Output, Pull};
 use embassy_rp::interrupt;
@@ -14,7 +14,7 @@ use embassy_rp::spi::{Config as SpiConfig, Spi};
 use embassy_rp::usb::Driver;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::pipe::Pipe;
-use embassy_time::Delay;
+use embassy_time::{Delay, Duration, Instant, Timer};
 use embassy_usb::class::cdc_acm::{CdcAcmClass, State};
 use embassy_usb::driver::EndpointError;
 use embassy_usb::{Builder, Config as UsbConfig};
@@ -22,26 +22,24 @@ use embedded_hal_async::spi::ExclusiveDevice;
 use embedded_io::asynch::Write;
 use panic_probe as _;
 use w5500_dhcp::{
-    hl::{
-        net::{Eui48Addr, Ipv4Addr},
-        Tcp,
-    },
+    hl::{net::Eui48Addr, Tcp},
     ll::{
         aio::Registers,
         eh1::{reset as w5500_reset, vdm::W5500},
         Sn,
     },
+    Client as DhcpClient, Hostname,
 };
 
 pub mod binary_info;
 
 const PACKET_SIZE: usize = 64;
 
-const DEFAULT_IP: Ipv4Addr = Ipv4Addr::new(10, 0, 0, 10);
-const DEFAULT_SUBNET: Ipv4Addr = Ipv4Addr::new(255, 255, 255, 0);
-const DEFAULT_GATEWAY: Ipv4Addr = Ipv4Addr::new(0, 0, 0, 0);
 const DEFAULT_MAC: Eui48Addr = Eui48Addr::new(0x02, 0x00, 0x00, 0x00, 0x00, 0x00);
+const DEFAULT_HOSTNAME_STR: &'static str = "rp2040";
+const DEFAULT_HOSTNAME: Hostname<'static> = Hostname::new_unwrapped(DEFAULT_HOSTNAME_STR);
 
+const DHCP_SOCKET: Sn = Sn::Sn0;
 const TELNET_SOCKET: Sn = Sn::Sn1;
 const TELNET_PORT: u16 = 23;
 
@@ -51,6 +49,8 @@ enum SocketState {
     Connected,
     Disconnected,
 }
+
+// TODO: handle errors better
 
 #[embassy_executor::main]
 async fn main(_spawner: Spawner) {
@@ -82,23 +82,17 @@ async fn main(_spawner: Spawner) {
         .set_shar(&DEFAULT_MAC)
         .await
         .expect("failed to set MAC address");
-    w5500
-        .set_sipr(&DEFAULT_IP)
-        .await
-        .expect("failed to set IP address");
-    w5500
-        .set_gar(&DEFAULT_GATEWAY)
-        .await
-        .expect("failed to set gateway");
-    w5500
-        .set_subr(&DEFAULT_SUBNET)
-        .await
-        .expect("failed to set subnet mask");
     // Enable interrupts for socket
     w5500
         .set_simr(TELNET_SOCKET.bitmask())
         .await
         .expect("failed to enable socket interrupts");
+    // TODO: mask SENDOK interrupt on telnet socket
+
+    // TODO: generate seed randomly
+    let dhcp_seed = 4;
+    let mut dhcp_client = DhcpClient::new(DHCP_SOCKET, dhcp_seed, DEFAULT_MAC, DEFAULT_HOSTNAME);
+    dhcp_client.setup_socket(&mut w5500).unwrap();
 
     // Create the driver, from the HAL.
     let irq = interrupt::take!(USBCTRL_IRQ);
@@ -106,8 +100,8 @@ async fn main(_spawner: Spawner) {
 
     // Create embassy-usb Config
     let mut config = UsbConfig::new(0xc0de, 0xcafe);
-    config.manufacturer = Some("Embassy");
-    config.product = Some("USB-serial example");
+    config.manufacturer = Some("yodal_");
+    config.product = Some("RP2040 RFC2217 Adapter");
     config.serial_number = Some("12345678");
     config.max_power = 100;
     config.max_packet_size_0 = PACKET_SIZE as u8;
@@ -147,45 +141,77 @@ async fn main(_spawner: Spawner) {
 
     let w5500_fut = async {
         loop {
+            let mut dhcp_delay_secs = 0u32;
+
+            // TODO: maybe don't listen while we have no IP address
             w5500.tcp_listen(TELNET_SOCKET, TELNET_PORT).unwrap();
+
             let mut socket_state = SocketState::Listening;
             while socket_state != SocketState::Disconnected {
                 let mut usb_buf = [0; PACKET_SIZE as usize];
-                match select(w5500_int.wait_for_low(), usb_to_eth.read(&mut usb_buf)).await {
-                    Either::First(_) => {
+                match select3(
+                    w5500_int.wait_for_low(),
+                    Timer::after(Duration::from_secs(dhcp_delay_secs as u64)),
+                    usb_to_eth.read(&mut usb_buf),
+                )
+                .await
+                {
+                    Either3::First(_) => {
                         // TODO: handle IR interrupts
 
-                        // TODO: check SIR for source of socket interrupts
+                        let sir = w5500.sir().await.unwrap();
 
-                        let sn_ir = w5500.sn_ir(TELNET_SOCKET).await.unwrap();
-                        if sn_ir.any_raised() {
-                            w5500.set_sn_ir(TELNET_SOCKET, sn_ir.into()).await.unwrap();
-                        }
-
-                        if sn_ir.con_raised() {
-                            // TODO: maybe clear usb_to_eth pipe
-                            socket_state = SocketState::Connected;
-                        }
-                        if sn_ir.recv_raised() {
-                            w5500.set_sn_ir(TELNET_SOCKET, sn_ir.into()).await.unwrap();
-                            let mut eth_buf = [0; PACKET_SIZE as usize];
-                            let eth_bytes = w5500.tcp_read(TELNET_SOCKET, &mut eth_buf).unwrap();
-
-                            eth_to_usb_writer
-                                .write_all(&eth_buf[..eth_bytes as usize])
-                                .await
+                        // DHCP interrupt handling
+                        if sir & DHCP_SOCKET.bitmask() != 0 {
+                            dhcp_delay_secs = dhcp_client
+                                .process(
+                                    &mut w5500,
+                                    (Instant::now().as_secs() % (u32::MAX as u64)) as u32,
+                                )
                                 .unwrap();
                         }
-                        if sn_ir.discon_raised() {
-                            info!("socket disconnected");
-                            socket_state = SocketState::Disconnected;
-                        }
-                        if sn_ir.timeout_raised() {
-                            info!("socket timed out");
-                            socket_state = SocketState::Disconnected;
+
+                        // Telnet interrupt handling
+                        if sir & TELNET_SOCKET.bitmask() != 0 {
+                            let sn_ir = w5500.sn_ir(TELNET_SOCKET).await.unwrap();
+                            if sn_ir.any_raised() {
+                                w5500.set_sn_ir(TELNET_SOCKET, sn_ir.into()).await.unwrap();
+                            }
+
+                            if sn_ir.con_raised() {
+                                // TODO: maybe clear usb_to_eth pipe
+                                socket_state = SocketState::Connected;
+                            }
+                            if sn_ir.recv_raised() {
+                                w5500.set_sn_ir(TELNET_SOCKET, sn_ir.into()).await.unwrap();
+                                let mut eth_buf = [0; PACKET_SIZE as usize];
+                                let eth_bytes =
+                                    w5500.tcp_read(TELNET_SOCKET, &mut eth_buf).unwrap();
+
+                                eth_to_usb_writer
+                                    .write_all(&eth_buf[..eth_bytes as usize])
+                                    .await
+                                    .unwrap();
+                            }
+                            if sn_ir.discon_raised() {
+                                info!("socket disconnected");
+                                socket_state = SocketState::Disconnected;
+                            }
+                            if sn_ir.timeout_raised() {
+                                info!("socket timed out");
+                                socket_state = SocketState::Disconnected;
+                            }
                         }
                     }
-                    Either::Second(usb_bytes) => {
+                    Either3::Second(_) => {
+                        dhcp_delay_secs = dhcp_client
+                            .process(
+                                &mut w5500,
+                                (Instant::now().as_secs() % (u32::MAX as u64)) as u32,
+                            )
+                            .unwrap();
+                    }
+                    Either3::Third(usb_bytes) => {
                         if socket_state == SocketState::Connected {
                             let mut total_bytes_written = 0;
                             loop {
@@ -213,6 +239,7 @@ async fn main(_spawner: Spawner) {
             let mut usb_buf = [0; PACKET_SIZE];
 
             // TODO: maybe clear eth_to_usb pipe on connect
+            // TODO: check for line-coding changes
             let usb_read_fut = async {
                 class.wait_connection().await;
                 class.read_packet(&mut usb_buf).await
