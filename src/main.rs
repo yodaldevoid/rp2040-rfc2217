@@ -14,6 +14,7 @@ use embassy_rp::spi::{Config as SpiConfig, Spi};
 use embassy_rp::usb::Driver;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::pipe::Pipe;
+use embassy_time::Delay;
 use embassy_usb::class::cdc_acm::{CdcAcmClass, State};
 use embassy_usb::driver::EndpointError;
 use embassy_usb::{Builder, Config as UsbConfig};
@@ -25,7 +26,11 @@ use w5500_dhcp::{
         net::{Eui48Addr, Ipv4Addr},
         Tcp,
     },
-    ll::{aio::Registers, eh1::vdm::W5500, Sn},
+    ll::{
+        aio::Registers,
+        eh1::{reset as w5500_reset, vdm::W5500},
+        Sn,
+    },
 };
 
 pub mod binary_info;
@@ -69,7 +74,8 @@ async fn main(_spawner: Spawner) {
     let w5500_spi_dev = ExclusiveDevice::new(spi0, cs);
     let mut w5500_int = Input::new(p.PIN_20, Pull::None);
 
-    // TODO: reset W5500
+    let mut w5500_rst = Output::new(p.PIN_15, Level::High);
+    w5500_reset(&mut w5500_rst, &mut Delay).unwrap();
     let mut w5500 = W5500::new(w5500_spi_dev);
 
     w5500
