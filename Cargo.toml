@@ -1,0 +1,36 @@
+[package]
+edition = "2021"
+name = "rp2040-rfc2217-embassy"
+version = "0.1.0"
+license = "MIT OR Apache-2.0"
+
+
+[dependencies]
+embassy-sync = { version = "0.1.0", git = "https://github.com/embassy-rs/embassy.git", features = ["defmt"] }
+embassy-executor = { version = "0.1.0", git = "https://github.com/embassy-rs/embassy.git", features = ["defmt", "integrated-timers"] }
+embassy-time = { version = "0.1.0", git = "https://github.com/embassy-rs/embassy.git", features = ["defmt", "defmt-timestamp-uptime"] }
+embassy-rp = { version = "0.1.0", git = "https://github.com/embassy-rs/embassy.git", features = ["defmt", "unstable-traits", "nightly", "unstable-pac", "time-driver"] }
+embassy-usb = { version = "0.1.0", git = "https://github.com/embassy-rs/embassy.git", features = ["defmt"] }
+embassy-net = { version = "0.1.0", git = "https://github.com/embassy-rs/embassy.git", features = ["defmt", "nightly", "tcp", "dhcpv4", "medium-ethernet", "pool-16"] }
+embassy-futures = { version = "0.1.0", git = "https://github.com/embassy-rs/embassy.git" }
+embassy-usb-logger = { version = "0.1.0", git = "https://github.com/embassy-rs/embassy.git" }
+
+defmt = "0.3"
+defmt-rtt = "0.3"
+panic-probe = { version = "0.3", features = ["print-defmt"] }
+
+cortex-m = { version = "0.7.6", features = ["critical-section-single-core"] }
+cortex-m-rt = "0.7.0"
+futures = { version = "0.3.17", default-features = false, features = ["async-await", "cfg-target-has-atomic", "unstable"] }
+
+rp-binary-info = { version = "0.1.0", git = "https://github.com/rp-rs/rp-binary-info.git" }
+
+embedded-hal-1 = { package = "embedded-hal", version = "=1.0.0-alpha.9" }
+embedded-hal-async = { version = "0.1.0-alpha.3" }
+embedded-io = { version = "0.3.1", features = ["async", "defmt"] }
+embedded-storage = { version = "0.3" }
+static_cell = "1.0.0"
+log = "0.4"
+
+[profile.release]
+debug = true
