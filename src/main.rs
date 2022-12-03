@@ -8,6 +8,7 @@ use embassy_executor::Spawner;
 use embassy_futures::join::join3;
 use embassy_futures::select::{select, select3, Either, Either3};
 use embassy_futures::yield_now;
+use embassy_rp::clocks::RoscRng;
 use embassy_rp::gpio::{Input, Level, Output, Pull};
 use embassy_rp::interrupt;
 use embassy_rp::spi::{Config as SpiConfig, Spi};
@@ -21,6 +22,7 @@ use embassy_usb::{Builder, Config as UsbConfig};
 use embedded_hal_async::spi::ExclusiveDevice;
 use embedded_io::asynch::Write;
 use panic_probe as _;
+use rand::RngCore;
 use w5500_dhcp::{
     hl::{net::Eui48Addr, Tcp},
     ll::{
@@ -58,6 +60,8 @@ async fn main(_spawner: Spawner) {
 
     let p = embassy_rp::init(Default::default());
 
+    let mut rng = RoscRng;
+
     let miso = p.PIN_16;
     let mosi = p.PIN_19;
     let clk = p.PIN_18;
@@ -89,8 +93,7 @@ async fn main(_spawner: Spawner) {
         .expect("failed to enable socket interrupts");
     // TODO: mask SENDOK interrupt on telnet socket
 
-    // TODO: generate seed randomly
-    let dhcp_seed = 4;
+    let dhcp_seed = rng.next_u64();
     let mut dhcp_client = DhcpClient::new(DHCP_SOCKET, dhcp_seed, DEFAULT_MAC, DEFAULT_HOSTNAME);
     dhcp_client.setup_socket(&mut w5500).unwrap();
 

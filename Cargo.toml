@@ -6,13 +6,13 @@ license = "MIT OR Apache-2.0"
 
 
 [dependencies]
-embassy-sync = { version = "0.1.0", git = "https://github.com/embassy-rs/embassy.git", rev = "cea29d7", features = ["defmt", "nightly"] }
-embassy-executor = { version = "0.1.0", git = "https://github.com/embassy-rs/embassy.git", rev = "cea29d7", features = ["defmt", "integrated-timers"] }
-embassy-time = { version = "0.1.0", git = "https://github.com/embassy-rs/embassy.git", rev = "cea29d7", features = ["defmt", "defmt-timestamp-uptime", "unstable-traits", "nightly"] }
-embassy-rp = { version = "0.1.0", git = "https://github.com/embassy-rs/embassy.git", rev = "cea29d7", features = ["defmt", "unstable-traits", "nightly", "unstable-pac", "time-driver"] }
-embassy-usb = { version = "0.1.0", git = "https://github.com/embassy-rs/embassy.git", rev = "cea29d7", features = ["defmt"] }
-embassy-futures = { version = "0.1.0", git = "https://github.com/embassy-rs/embassy.git", rev = "cea29d7" }
-embassy-usb-logger = { version = "0.1.0", git = "https://github.com/embassy-rs/embassy.git", rev = "cea29d7" }
+embassy-sync = { version = "0.1.0", git = "https://github.com/embassy-rs/embassy.git", rev = "f109e73", features = ["defmt", "nightly"] }
+embassy-executor = { version = "0.1.0", git = "https://github.com/embassy-rs/embassy.git", rev = "f109e73", features = ["defmt", "integrated-timers"] }
+embassy-time = { version = "0.1.0", git = "https://github.com/embassy-rs/embassy.git", rev = "f109e73", features = ["defmt", "defmt-timestamp-uptime", "unstable-traits", "nightly"] }
+embassy-rp = { version = "0.1.0", git = "https://github.com/embassy-rs/embassy.git", rev = "f109e73", features = ["defmt", "unstable-traits", "nightly", "unstable-pac", "time-driver"] }
+embassy-usb = { version = "0.1.0", git = "https://github.com/embassy-rs/embassy.git", rev = "f109e73", features = ["defmt"] }
+embassy-futures = { version = "0.1.0", git = "https://github.com/embassy-rs/embassy.git", rev = "f109e73" }
+embassy-usb-logger = { version = "0.1.0", git = "https://github.com/embassy-rs/embassy.git", rev = "f109e73" }
 
 defmt = "0.3"
 defmt-rtt = "0.3"
@@ -30,6 +30,7 @@ embedded-io = { version = "0.4.0", features = ["async", "defmt"] }
 embedded-storage = { version = "0.3" }
 static_cell = "1.0.0"
 log = "0.4"
+rand = { version = "0.8.5", default-features = false }
 
 w5500-ll = { version = "*", git = "https://github.com/newAM/w5500-rs.git", rev = "358d647",  features = ["async", "eha0a"] }
 w5500-dhcp = { version = "0.4.2", git = "https://github.com/newAM/w5500-rs.git", rev = "358d647", features = ["defmt", "eh1"] }
