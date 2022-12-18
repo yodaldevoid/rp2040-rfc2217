@@ -1,14 +1,8 @@
 use core::convert::Infallible;
-use core::ops::Deref;
 
 use defmt::{debug, info, todo, warn};
 use embassy_futures::select::{select, Either};
-use embassy_sync::{
-    blocking_mutex::raw::RawMutex,
-    channel::Channel,
-    mutex::Mutex,
-    pipe::{Pipe, Writer},
-};
+use embassy_sync::{blocking_mutex::raw::RawMutex, channel::Channel, mutex::Mutex, pipe::Pipe};
 use embedded_io::{
     asynch::{Read, Write},
     Io,
@@ -19,6 +13,8 @@ use nom::{
     sequence::{preceded, tuple},
     IResult, Parser,
 };
+
+use crate::utils::{Cursor, PipeExt};
 
 const SE: u8 = 240;
 const NOP: u8 = 241;
@@ -388,31 +384,5 @@ impl<'a, M: RawMutex> Io for DataSender<'a, M> {
 impl<'a, M: RawMutex> Read for DataSender<'a, M> {
     async fn read(&mut self, buf: &mut [u8]) -> Result<usize, Infallible> {
         Ok(self.pipe.read(buf).await)
-    }
-}
-
-pub trait PipeExt {
-    async fn write_all(&self, buf: &[u8]);
-}
-
-impl<M: RawMutex, const N: usize> PipeExt for Pipe<M, N> {
-    async fn write_all(&self, buf: &[u8]) {
-        let mut buf = buf;
-        while !buf.is_empty() {
-            let n = self.write(buf).await;
-            assert!(n != 0, "zero-length write.");
-            buf = &buf[n..];
-        }
-    }
-}
-
-impl<'a, M: RawMutex, const N: usize> PipeExt for Writer<'a, M, N> {
-    async fn write_all(&self, buf: &[u8]) {
-        let mut buf = buf;
-        while !buf.is_empty() {
-            let n = self.write(buf).await;
-            assert!(n != 0, "zero-length write.");
-            buf = &buf[n..];
-        }
     }
 }
