@@ -274,14 +274,27 @@ async fn w5500_loop<D, I, M: RawMutex>(
             .expect("failed to disabled SENDOK interrupt on socket");
     }
 
-    // TODO: don't use if `PROGRAM_CONFIG.ip` is not undefined
-    let mut dhcp_client = DhcpClient::new(
-        DHCP_SOCKET,
-        RoscRng.next_u64(),
-        PROGRAM_CONFIG.mac,
-        PROGRAM_CONFIG.hostname(),
-    );
-    dhcp_client.setup_socket(&mut w5500).unwrap();
+    let mut dhcp_client = if !PROGRAM_CONFIG.ip.is_unspecified()
+        && !PROGRAM_CONFIG.subnet_mask.is_unspecified()
+        && !PROGRAM_CONFIG.gateway_ip.is_unspecified()
+    {
+        info!("Using static IP");
+        w5500.set_shar(&PROGRAM_CONFIG.mac).await.unwrap();
+        w5500.set_sipr(&PROGRAM_CONFIG.ip).await.unwrap();
+        w5500.set_subr(&PROGRAM_CONFIG.subnet_mask).await.unwrap();
+        w5500.set_gar(&PROGRAM_CONFIG.gateway_ip).await.unwrap();
+        None
+    } else {
+        info!("Using DHCP");
+        let dhcp_client = DhcpClient::new(
+            DHCP_SOCKET,
+            RoscRng.next_u64(),
+            PROGRAM_CONFIG.mac,
+            PROGRAM_CONFIG.hostname(),
+        );
+        dhcp_client.setup_socket(&mut w5500).unwrap();
+        Some(dhcp_client)
+    };
 
     let mut w5500 = Mutex::<NoopRawMutex, _>::new(w5500);
     let mut socket_state = [
@@ -322,9 +335,16 @@ async fn w5500_loop<D, I, M: RawMutex>(
             socket: SOCKETS[socket],
             w5500: &w5500,
         };
+        let timer_fut = async {
+            if dhcp_client.is_some() {
+                Timer::after(Duration::from_secs(dhcp_delay_secs as u64)).await;
+            } else {
+                yield_now().await;
+            }
+        };
         match select3(
             w5500_int.wait_for_low(),
-            Timer::after(Duration::from_secs(dhcp_delay_secs as u64)),
+            timer_fut,
             select_array([
                 codec[0].encode(&mut write_socket(0)),
                 codec[1].encode(&mut write_socket(1)),
@@ -347,12 +367,14 @@ async fn w5500_loop<D, I, M: RawMutex>(
 
                 // DHCP interrupt handling
                 if sir & DHCP_SOCKET.bitmask() != 0 {
-                    dhcp_delay_secs = dhcp_client
-                        .process(
-                            &mut *w5500,
-                            (Instant::now().as_secs() % (u32::MAX as u64)) as u32,
-                        )
-                        .unwrap();
+                    if let Some(dhcp_client) = dhcp_client.as_mut() {
+                        dhcp_delay_secs = dhcp_client
+                            .process(
+                                &mut *w5500,
+                                (Instant::now().as_secs() % (u32::MAX as u64)) as u32,
+                            )
+                            .unwrap();
+                    }
                 }
 
                 // Telnet interrupt handling
@@ -390,12 +412,14 @@ async fn w5500_loop<D, I, M: RawMutex>(
                 }
             }
             Either3::Second(_) => {
-                dhcp_delay_secs = dhcp_client
-                    .process(
-                        &mut *w5500.lock().await,
-                        (Instant::now().as_secs() % (u32::MAX as u64)) as u32,
-                    )
-                    .unwrap();
+                if let Some(dhcp_client) = dhcp_client.as_mut() {
+                    dhcp_delay_secs = dhcp_client
+                        .process(
+                            &mut *w5500.lock().await,
+                            (Instant::now().as_secs() % (u32::MAX as u64)) as u32,
+                        )
+                        .unwrap();
+                }
             }
             Either3::Third(_) => {}
         }
