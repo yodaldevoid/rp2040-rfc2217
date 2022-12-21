@@ -262,9 +262,22 @@ async fn w5500_loop<D, I, M: RawMutex>(
     I: Pin,
 {
     // Enable interrupts for socket
-    // TODO: only enable sockets that are enabled
     w5500
-        .set_simr(SOCKETS[..7].iter().fold(0, |acc, s| acc | s.bitmask()))
+        .set_simr(
+            SOCKETS[..7]
+                .iter()
+                .zip(PROGRAM_CONFIG.ports)
+                .filter_map(
+                    |(socket, addr)| {
+                        if addr.port() == 0 {
+                            None
+                        } else {
+                            Some(socket)
+                        }
+                    },
+                )
+                .fold(0, |acc, s| acc | s.bitmask()),
+        )
         .await
         .expect("failed to enable socket interrupts");
     for socket in &SOCKETS[..7] {
