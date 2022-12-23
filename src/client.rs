@@ -337,7 +337,7 @@ async fn w5500_loop<D, I, M: RawMutex>(
             let state = state.get_mut();
             if *state == SocketState::Disconnected {
                 info!("socket listening: {}::{}", socket, port);
-                // TODO: maybe don't listen while we have no IP address
+                // TODO: connect rather than listen
                 w5500.get_mut().tcp_listen(*socket, port).unwrap();
                 *state = SocketState::Listening;
             }

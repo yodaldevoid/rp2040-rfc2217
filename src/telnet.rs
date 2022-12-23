@@ -45,6 +45,13 @@ enum Event<'a> {
     Command(u8),
 }
 
+enum TelnetOption {
+    TransmitBinary = 0,
+    Echo = 1,
+    SuppressGoAhead = 3,
+    ComPortOption = 44,
+}
+
 #[derive(Clone, Copy, Debug, defmt::Format)]
 enum Negotiation {
     // WILL <OPTION>
@@ -138,65 +145,26 @@ impl Negotiation {
 
 // TODO: tests
 
-struct Cursor<const N: usize> {
-    buf: [u8; N],
-    _len: usize,
-}
-
-impl<const N: usize> Cursor<N> {
-    fn new() -> Self {
-        Self {
-            buf: [0; N],
-            _len: 0,
-        }
-    }
-
-    fn len(&self) -> usize {
-        self._len
-    }
-
-    fn clear(&mut self) {
-        self._len = 0;
-    }
-
-    fn extend_with<E>(
-        &mut self,
-        f: impl FnOnce(&mut [u8]) -> Result<usize, E>,
-    ) -> Result<usize, E> {
-        let bytes = f(&mut self.buf[self._len..])?;
-        self._len += bytes;
-        Ok(bytes)
-    }
-
-    fn consume(&mut self, i: usize) {
-        let i = self._len.min(i);
-        self._len -= i;
-        self.buf.copy_within(i.., 0);
-    }
-}
-
-impl<const N: usize> Deref for Cursor<N> {
-    type Target = [u8];
-
-    fn deref(&self) -> &[u8] {
-        &self.buf[..self._len]
-    }
-}
-
 enum ControlMessage {
+    Init(Negotiation),
     Negotiate(Negotiation),
     // Decoder recieved GA, flush the buffer even without a line end.
     FlushBuffer,
 }
 
 struct NvtOptions {
+    // TODO: use option with None indicating waiting for response
+    suppress_go_ahead: bool,
     // Only valid for decoder
     synch: bool,
 }
 
 impl Default for NvtOptions {
     fn default() -> Self {
-        Self { synch: false }
+        Self {
+            suppress_go_ahead: true,
+            synch: false,
+        }
     }
 }
 
@@ -229,7 +197,18 @@ impl<M: RawMutex> Codec<M> {
         while let Ok(_) = self.control_channel.try_recv() {}
     }
 
-    pub async fn init(&self) {}
+    pub async fn init(&self) {
+        self.control_channel
+            .send(ControlMessage::Init(Negotiation::Will(
+                TelnetOption::SuppressGoAhead as u8,
+            )))
+            .await;
+        self.control_channel
+            .send(ControlMessage::Init(Negotiation::Do(
+                TelnetOption::SuppressGoAhead as u8,
+            )))
+            .await;
+    }
 
     pub async fn start_synch(&self) {
         self.recv_options.lock().await.synch = true;
@@ -266,6 +245,21 @@ impl<M: RawMutex> Codec<M> {
                     (Event::Negotiate(negotiation), false) => {
                         debug!("decoder: {:?}", negotiation);
                         let response = match negotiation {
+                            // Suppress Go Ahead
+                            Negotiation::Will(3) | Negotiation::Wont(3) => {
+                                let option = &mut self.recv_options.lock().await.suppress_go_ahead;
+                                let rsp = if !*option && negotiation.acceptance() {
+                                    info!("decoder: Enabling suppress go-ahead");
+                                    Some(negotiation)
+                                } else if *option && !negotiation.acceptance() {
+                                    info!("decoder: Disabling suppress go-ahead");
+                                    Some(negotiation)
+                                } else {
+                                    None
+                                };
+                                *option = negotiation.acceptance();
+                                rsp
+                            }
                             // Ignore disables of unsupported options as we will alway have them
                             // disabled.
                             Negotiation::Wont(_) => None,
@@ -313,8 +307,26 @@ impl<M: RawMutex> Codec<M> {
             }
             Either::Second(event) => {
                 match event {
+                    ControlMessage::Init(negotiation) => {
+                        writer.write_all(&negotiation.encode()).await?;
+                    }
                     ControlMessage::Negotiate(negotiation) => {
                         let response = match negotiation {
+                            // Suppress Go Ahead
+                            Negotiation::Do(3) | Negotiation::Dont(3) => {
+                                let option = &mut self.send_options.lock().await.suppress_go_ahead;
+                                let rsp = if !*option && negotiation.acceptance() {
+                                    info!("encoder: Enabling suppress go-ahead");
+                                    Some(negotiation)
+                                } else if *option && !negotiation.acceptance() {
+                                    info!("encoder: Disabling suppress go-ahead");
+                                    Some(negotiation)
+                                } else {
+                                    None
+                                };
+                                *option = negotiation.acceptance();
+                                rsp
+                            }
                             // Ignore disables of unsupported options as we will alway have them
                             // disabled.
                             Negotiation::Dont(_) => None,
@@ -332,7 +344,11 @@ impl<M: RawMutex> Codec<M> {
                             writer.write_all(&response.encode()).await?;
                         }
                     }
-                    ControlMessage::FlushBuffer => todo!("flush send buffer"),
+                    ControlMessage::FlushBuffer => {
+                        if !self.send_options.lock().await.suppress_go_ahead {
+                            todo!("flush send buffer")
+                        }
+                    }
                 }
             }
         }
